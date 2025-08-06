@@ -5,46 +5,41 @@ from slack_bolt import Say, Ack, BoltContext
 import os
 import uuid
 from a2a.client import A2AClient
+from a2a.types import Message, TextPart, MessageSendParams, MessageResponse
 
 async def invoke_a2a_agent(agent_url: str, input: str, logger: Logger):
     """
     Invokes the A2A agent and returns the response.
     """
     a2a_client = A2AClient(url=agent_url, timeout=600.0)
-    task_id = str(uuid.uuid4())
-    session_id = str(uuid.uuid4())
 
-    payload = {
-        "id": task_id,
-        "sessionId": session_id,
-        "acceptedOutputModes": ["text"],
-        "message": {
-            "role": "user",
-            "parts": [
-                {
-                    "type": "text",
-                    "text": input,
-                }
-            ]
-        }
-    }
+    # Create Pydantic models
+    text_part = TextPart(text=input)
+    message = Message(role="user", parts=[text_part])
+
+    # Create MessageSendParams
+    message_params = MessageSendParams(
+        message=message,
+        metadata={}
+    )
 
     logger.info(f"Invoking the agent: {agent_url}")
 
+    # Convert to dict for the client
+    payload = message_params.model_dump()
     response = await a2a_client.send_task(payload)
     text = ""
-    for artifact in response.result.artifacts:
-        for part in artifact.parts:
-            text += part.text
+    # The API returns the message directly in the result
+    if response.result and response.result.parts:
+        for part in response.result.parts:
+            if hasattr(part, 'text'):
+                text += part.text
     return text
-
-
 
 async def mykagent_command(
     client: WebClient, ack: Ack, command, say: Say, logger: Logger, context: BoltContext
 ):
     await ack()
-
 
     user_id = context["user_id"]
     channel_id = context["channel_id"]
@@ -72,8 +67,7 @@ async def mykagent_command(
         response = await invoke_a2a_agent(kagent_a2a_url, text, logger)
         await client.chat_postMessage(
             channel=channel_id,
-            user=user_id,
-            text=response,
+            text=f"*Agent Response:*\n{response}",
         )
     except Exception as e:
         logger.error(f"Error: {e}")
