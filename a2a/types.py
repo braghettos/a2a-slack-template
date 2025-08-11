@@ -24,7 +24,7 @@ class TaskState(str, Enum):
 
 
 class TextPart(BaseModel):
-    type: Literal['text'] = 'text'
+    kind: Literal['text'] = 'text'
     text: str
     metadata: dict[str, Any] | None = None
 
@@ -49,23 +49,37 @@ class FileContent(BaseModel):
 
 
 class FilePart(BaseModel):
-    type: Literal['file'] = 'file'
+    kind: Literal['file'] = 'file'
     file: FileContent
     metadata: dict[str, Any] | None = None
 
 
 class DataPart(BaseModel):
-    type: Literal['data'] = 'data'
+    kind: Literal['data'] = 'data'
     data: dict[str, Any]
     metadata: dict[str, Any] | None = None
 
 
-Part = Annotated[TextPart | FilePart | DataPart, Field(discriminator='type')]
+Part = Annotated[TextPart | FilePart | DataPart, Field(discriminator='kind')]
 
 
 class Message(BaseModel):
     role: Literal['user', 'agent']
     parts: list[Part]
+    messageId: str = Field(default_factory=lambda: uuid4().hex)
+    metadata: dict[str, Any] | None = None
+
+
+class MessageResponse(BaseModel):
+    contextId: str = ""
+    kind: str = "message"  # Make this more flexible to handle empty strings
+    messageId: str
+    parts: list[Part]
+    role: Literal['user', 'agent']
+
+
+class MessageSendParams(BaseModel):
+    message: Message
     metadata: dict[str, Any] | None = None
 
 
@@ -173,16 +187,16 @@ class JSONRPCResponse(JSONRPCMessage):
 
 
 class SendTaskRequest(JSONRPCRequest):
-    method: Literal['tasks/send'] = 'tasks/send'
-    params: TaskSendParams
+    method: Literal['message/send'] = 'message/send'
+    params: MessageSendParams
 
 
 class SendTaskResponse(JSONRPCResponse):
-    result: Task | None = None
+    result: MessageResponse | None = None
 
 
 class SendTaskStreamingRequest(JSONRPCRequest):
-    method: Literal['tasks/sendSubscribe'] = 'tasks/sendSubscribe'
+    method: Literal['tasks/sendMessageSubscribe'] = 'tasks/sendMessageSubscribe'
     params: TaskSendParams
 
 
