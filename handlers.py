@@ -2,39 +2,69 @@ from slack_bolt.async_app import AsyncApp
 from logging import Logger
 from slack_sdk import WebClient
 from slack_bolt import Say, Ack, BoltContext
-import os
 import uuid
+import httpx
+import os
 from a2a.client import A2AClient
-from a2a.types import Message, TextPart, MessageSendParams, MessageResponse
+from a2a.types import Message, TextPart, MessageSendParams, SendMessageRequest
 
-async def invoke_a2a_agent(agent_url: str, input: str, logger: Logger):
+async def invoke_a2a_agent(agent_url: str, input: str, logger: Logger):# -> Any | Literal['', 'No artifacts found in the response', '...:
     """
-    Invokes the A2A agent and returns the response.
+    Invokes the A2A agent and returns the response and usage information.
     """
-    a2a_client = A2AClient(url=agent_url, timeout=600.0)
+    a2a_client = A2AClient(
+        url=agent_url,
+        httpx_client=httpx.AsyncClient(timeout=600.0)
+    )
 
     # Create Pydantic models
     text_part = TextPart(text=input)
-    message = Message(role="user", parts=[text_part])
-
-    # Create MessageSendParams
-    message_params = MessageSendParams(
-        message=message,
-        metadata={}
-    )
+    message = Message(role="user", parts=[text_part], message_id=str(uuid.uuid4()))
 
     logger.info(f"Invoking the agent: {agent_url}")
-
-    # Convert to dict for the client
-    payload = message_params.model_dump()
-    response = await a2a_client.send_task(payload)
+    payload = MessageSendParams(message=message, message_id=str(uuid.uuid4()))
+ 
+    response = await a2a_client.send_message(SendMessageRequest(id=str(uuid.uuid4()), params=payload))
     text = ""
-    # The API returns the message directly in the result
-    if response.result and response.result.parts:
-        for part in response.result.parts:
-            if hasattr(part, 'text'):
-                text += part.text
-    return text
+    usage_info = ""
+
+    # The API returns a Task object with artifacts containing the response
+    if response.root and response.root.result:
+        task = response.root.result
+        if hasattr(task, 'artifacts') and task.artifacts:
+            for artifact in task.artifacts:
+                if hasattr(artifact, 'parts') and artifact.parts:
+                    for part in artifact.parts:
+                        if hasattr(part, 'root') and hasattr(part.root, 'text'):
+                            text += part.root.text
+            
+            # Extract usage information from task metadata
+            usage_info = extract_usage_info(task)
+        else:
+            text = "No artifacts found in the response"
+    else:
+        text = "No response from the agent"
+    
+    return text, usage_info
+
+def extract_usage_info(task) -> str:
+    """
+    Extract usage information from the task metadata.
+    """
+    try:
+        if hasattr(task, 'metadata') and task.metadata:
+            metadata = task.metadata
+            if 'adk_usage_metadata' in metadata:
+                usage_meta = metadata['adk_usage_metadata']
+                prompt_tokens = usage_meta.get('promptTokenCount', 0)
+                candidates_tokens = usage_meta.get('candidatesTokenCount', 0)
+                total_tokens = usage_meta.get('totalTokenCount', 0)
+                
+                return f"💡 *Token Usage:* • Prompt: {prompt_tokens:,} • Response: {candidates_tokens:,} • Total: {total_tokens:,}"
+        else:
+            return ""
+    except Exception:
+        return ""
 
 async def mykagent_command(
     client: WebClient, ack: Ack, command, say: Say, logger: Logger, context: BoltContext
@@ -64,17 +94,105 @@ async def mykagent_command(
 
     # Invoke the KAGENT A2A API
     try:
-        response = await invoke_a2a_agent(kagent_a2a_url, text, logger)
-        await client.chat_postMessage(
-            channel=channel_id,
-            text=f"*Agent Response:*\n{response}",
-        )
+        response, usage_info = await invoke_a2a_agent(kagent_a2a_url, text, logger)
+        if response and response.strip():
+            # Create a sophisticated AI agent response UI using Block Kit
+            response_blocks = [
+                {
+                    "type": "context",
+                    "elements": [
+                        {
+                            "type": "image",
+                            "image_url":"https://raw.githubusercontent.com/kagent-dev/main/img/kagent-mark.png",
+                            "alt_text": "kagent response"
+                        },
+                        {
+                            "type": "mrkdwn",
+                            "text": f"*Query:* {text}"
+                        },
+                    ]
+                },
+                {
+                    "type": "divider"
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": response
+                    }
+                },
+                {
+                    "type": "divider"
+                },
+                {
+                    "type": "context",
+                    "elements": [
+                        {
+                            "type": "mrkdwn",
+                            "text": usage_info
+                        }
+                    ]
+                }
+            ]
+            
+            await client.chat_postMessage(
+                channel=channel_id,
+                blocks=response_blocks,
+                text=f"AI Agent Response: {response[:100]}..." if len(response) > 100 else f"AI Agent Response: {response}"
+            )
+        else:
+            await client.chat_postMessage(
+                channel=channel_id,
+                text="No response received from the agent."
+            )
     except Exception as e:
         logger.error(f"Error: {e}")
+        error_blocks = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": "❌ Error",
+                    "emoji": True
+                }
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*Query:* {text}"
+                    }
+                ]
+            },
+            {
+                "type": "divider"
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Error Details:*\n```{str(e)}```"
+                }
+            },
+            {
+                "type": "divider"
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": "🔄 *Try again* or rephrase your question"
+                    }
+                ]
+            }
+        ]
         await client.chat_postMessage(
             channel=channel_id,
-            user=user_id,
-            text=f"Occurred an error while talking to kagent: {e}",
+            blocks=error_blocks,
+            text=f"AI Agent Error: {str(e)}"
         )
 
 
