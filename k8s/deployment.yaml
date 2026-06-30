@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: slack-bot
-          image: us-docker.pkg.dev/neon-481711/gcr.io/a2a-slack-bot:latest
+          image: ghcr.io/braghettos/a2a-slack-template:latest
           env:
             - name: SLACK_BOT_TOKEN
               valueFrom:
