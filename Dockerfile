@@ -1,6 +1,12 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 WORKDIR /app
+
+# Match pyproject's requires-python (>=3.12) with the base image, and pin uv to the
+# image's system interpreter — otherwise uv downloads a newer managed Python (3.14),
+# for which aiohttp has no wheel, forcing a from-source build that needs a C compiler
+# the slim image doesn't ship.
+ENV UV_PYTHON_PREFERENCE=only-system
 
 COPY pyproject.toml uv.lock ./
 
